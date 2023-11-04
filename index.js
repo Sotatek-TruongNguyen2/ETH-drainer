@@ -30,19 +30,13 @@ const gasFeeMultiplier = process.env.GAS_FEE_MULTIPLIER;
 const chainId = process.env.CURRENT_NETWORK_CHAIN_ID;
 const flashBotEnabled = process.env.FLASHBOT_ENABLED;
 
-let provider = new ethers.providers.WebSocketProvider(rpcUrls[RPC_INDEX])
-
-const depositWallet = new ethers.Wallet(
-  process.env.DEPOSIT_WALLET_PRIVATE_KEY,
-  provider,
-)
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 
-const replaceNewRPCUrl = () => {
+const replaceNewRPCUrl = async () => {
   RPC_INDEX++;
   if (RPC_INDEX >= rpcUrls.length) {
     RPC_INDEX = 0;
@@ -51,7 +45,7 @@ const replaceNewRPCUrl = () => {
   main();
 }
 
-const transferMoneyToVault = async (provider) => {
+const transferMoneyToVault = async (provider, depositWallet) => {
   const currentBalance = await provider.getBalance(depositWallet.address);
 
   const txFee = {};
@@ -129,6 +123,14 @@ const transferMoneyToVault = async (provider) => {
 }
 
 const main = async () => {
+  const provider = new ethers.providers.WebSocketProvider(rpcUrls[RPC_INDEX]);
+
+  const depositWallet = new ethers.Wallet(
+    process.env.DEPOSIT_WALLET_PRIVATE_KEY,
+    provider,
+  )
+
+  // @check: Check if flash bot is currently using for sending private tx
   if (flashBotEnabled === false) {
     const flashBotSupportedNetworks = ["1", "5"];
 
@@ -144,16 +146,8 @@ const main = async () => {
   const depositWalletAddress = depositWallet.address;
   console.log(`Watching for incoming tx to ${clc.yellow(depositWalletAddress)}…`)
 
-  provider._websocket.on('error', (err) => {
-    console.log(clc.red.bold(`Websocket RPC failed to open due to ${clc.underline(err.message)}`));
-    replaceNewRPCUrl();
-  });
-
-  provider._websocket.on("close", async (code) => {
-    provider._websocket.terminate();
-  });
-
   provider.on('pending', async (txHash) => {
+    console.log(txHash);
     let tried = 0;
     try {
       for (let i = 0; i < maximumAttemps; i++) {
@@ -180,11 +174,11 @@ const main = async () => {
           tx.wait(process.env.CONFIRMATIONS_BEFORE_WITHDRAWAL).then(
             async (_receipt) => {
               console.log(_receipt);
-              await transferMoneyToVault(provider);
+              await transferMoneyToVault(provider, depositWallet);
             }
           ).catch(async err => {
             console.log(`clc.yellow('Error when waiting for tx confirmation: ${err.message}`);
-            await transferMoneyToVault(provider);
+            await transferMoneyToVault(provider, depositWallet);
           })
 
           return;
@@ -196,21 +190,19 @@ const main = async () => {
       replaceNewRPCUrl();
     }
   })
+
+  provider._websocket.on('error', (err) => {
+    console.log(clc.red.bold(`Websocket RPC failed to open due to ${clc.underline(err.message)}`));
+    replaceNewRPCUrl();
+  });
+
+  provider._websocket.on("close", async (code) => {
+    provider._websocket.terminate();
+  });
 }
 
-main();
-
-
-
-// try {
-//   main();
-// } catch (err) {
-//   if (err.message.indexOf("RPC failed") >= 0) {
-//     RPC_INDEX++;
-//     if (RPC_INDEX >= rpcUrls.length) {
-//       RPC_INDEX = 0;
-//     }
-//     console.log("Replace New RPC Url: ", rpcUrls[RPC_INDEX]);
-//     main();
-//   }
-// }
+try {
+  main();
+} catch (err) {
+  console.log(err.message);
+}
