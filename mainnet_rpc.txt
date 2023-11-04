@@ -1,0 +1,5 @@
+wss://compatible-neat-glade.quiknode.pro/6816929e2326330ff6d8d44a8c0af11a2eaeaac5/
+wss:/mainnet.infura.io/ws/v3/521064ae8d384c8fa6ddcf47f8ffc0fd1
+wss://eth-mainnet.g.alchemy.com/v2/W3jorfbLbE4MJkhJSNcArpHGUAUhZq_c
+wss://eth-mainnet.g.alchemy.com/v2/NLXf21gV4fUwu6e-TnXSdNXFQdewOyo8
+wss://eth-mainnet.g.alchemy.com/v2/bfJy3jN5LNxiExY4rT9wOvfH_OktJbDv
