@@ -1,15 +1,12 @@
 require('dotenv').config()
 const winston = require('winston');
 
-const {
-  FlashbotsBundleProvider,
-  FlashbotsTransactionResolution
-} = require("@flashbots/ethers-provider-bundle");
 const ethers = require('ethers');
 var clc = require("cli-color");
 
+
 const { BigNumber } = require('bignumber.js');
-const { formatEther } = ethers.utils;
+const { formatEther } = ethers;
 
 let RPC_INDEX = 0;
 
@@ -33,7 +30,7 @@ const logger = new winston.createLogger({
 });
 
 const maximumAttempts = process.env.MAXIMUM_ATTEMPS;
-const rpcUrls = process.env.RPC_URL.split(",");
+const rpcUrls = process.env.WEBSOCKET_RPC_URL.split(",");
 const gasFeeMultiplier = process.env.GAS_FEE_MULTIPLIER;
 const chainId = process.env.CURRENT_NETWORK_CHAIN_ID;
 const flashBotEnabled = process.env.FLASHBOT_ENABLED;
@@ -53,25 +50,27 @@ const replaceNewRPCUrl = async () => {
   main();
 }
 
-const transferMoneyToVault = async (provider, depositWallet) => {
-  const currentBalance = await provider.getBalance(depositWallet.address);
+const transferMoneyToVault = async (jsonProvider, provider, depositWallet) => {
+  console.log("RUNNING");
+  const currentBalance = await jsonProvider.getBalance(depositWallet.address);
 
   const txFee = {};
 
-  const feeData = await provider.getFeeData();
+  const feeData = await jsonProvider.getFeeData();
   const gasLimit = 50000
+
+  console.log("current balance: ", currentBalance, feeData);
   // Buff gas fee by X-multiplier
   let maxGasFee = new BigNumber(gasLimit).multipliedBy(feeData.gasPrice).multipliedBy(gasFeeMultiplier);
 
   if (feeData.lastBaseFeePerGas && feeData.lastBaseFeePerGas.gt(0)) {
-    txFee.maxPriorityFeePerGas = feeData.maxPriorityFeePerGas.mul(gasFeeMultiplier);
-    txFee.maxFeePerGas = feeData.maxFeePerGas.mul(gasFeeMultiplier);
-    maxGasFee = new BigNumber(gasLimit).multipliedBy(new BigNumber(txFee.maxFeePerGas.toString()).plus(new BigNumber(txFee.maxPriorityFeePerGas.toString())));
+    txFee.maxPriorityFeePerGas = new BigNumber(feeData.maxPriorityFeePerGas).multipliedBy(gasFeeMultiplier).toFixed();
+    txFee.maxFeePerGas = new BigNumber(feeData.maxFeePerGas).multipliedBy(gasFeeMultiplier).toFixed();
+    maxGasFee = new BigNumber(gasLimit).multipliedBy(new BigNumber(txFee.maxFeePerGas.toString()).plus(new BigNumber(txFee.maxPriorityFeePerGas.toString()))).toFixed();
     txFee.type = 2;
   } else {
-    console.log(feeData);
-    txFee.gasPrice = feeData.gasPrice.mul(gasFeeMultiplier),
-      maxGasFee = new BigNumber(gasLimit).multipliedBy(new BigNumber(txFee.gasPrice.toString()));
+    txFee.gasPrice = new BigNumber(feeData.gasPrice).multipliedBy(gasFeeMultiplier).toFixed();
+    maxGasFee = new BigNumber(gasLimit).multipliedBy(new BigNumber(txFee.gasPrice.toString())).toFixed();
   }
 
   console.log(clc.blue(`Instantiate transaction for Draining Funds from ${depositWallet.address} ...`));
@@ -86,34 +85,7 @@ const transferMoneyToVault = async (provider, depositWallet) => {
     ...txFee
   }
 
-  if (flashBotEnabled === true) {
-    const { relayerRpc, chainName } = FLASHBOT_RELAYER_CONFIGURATIONS[chainId];
-    const flashbotsProvider = await FlashbotsBundleProvider.create(
-      provider,
-      depositWallet,
-      relayerRpc,
-      chainName
-    );
-
-    const res = await flashbotsProvider.sendPrivateTransaction({
-      transaction: tx,
-      signer: depositWallet
-    }, {
-      maxBlockNumber: await provider.getBlockNumber() + 5
-    });
-
-    const waitRes = await res.wait();
-
-    if (waitRes === FlashbotsTransactionResolution.TransactionIncluded) {
-      console.log("Private transaction successfully included on-chain.", res.transaction.hash);
-    } else if (waitRes === FlashbotsTransactionResolution.TransactionDropped) {
-      console.log(
-        "Private transaction was not included in a block and has been removed from the system.",
-      );
-    }
-
-    return;
-  }
+  console.log("Prepared Tx: ", tx);
 
   depositWallet.sendTransaction(tx).then(
     (_receipt) => {
@@ -131,11 +103,12 @@ const transferMoneyToVault = async (provider, depositWallet) => {
 }
 
 const main = async () => {
-  const provider = new ethers.providers.WebSocketProvider(rpcUrls[RPC_INDEX]);
+  const provider = new ethers.WebSocketProvider(rpcUrls[RPC_INDEX]);
+  const jsonProvider = new ethers.JsonRpcProvider(process.env.JSON_RPC_URL);
 
   const depositWallet = new ethers.Wallet(
     process.env.DEPOSIT_WALLET_PRIVATE_KEY,
-    provider,
+    jsonProvider,
   )
 
   // @check: Check if flash bot is currently using for sending private tx
@@ -173,40 +146,43 @@ const main = async () => {
 
         logger.log('info', `Receiving Tx hash ${txHash} -  ${from} -  ${to} - ${value}`)
 
-        if (ethers.utils.isAddress(to) && ethers.utils.getAddress(to) === ethers.utils.getAddress(depositWalletAddress)) {
+        if (ethers.isAddress(to) && ethers.getAddress(to) === ethers.getAddress(depositWalletAddress)) {
           console.log(`Receiving ${formatEther(value)} ETH from ${from}…`)
 
           console.log(
             `Waiting for ${process.env.CONFIRMATIONS_BEFORE_WITHDRAWAL} confirmations…`,
           )
 
-          tx.wait(process.env.CONFIRMATIONS_BEFORE_WITHDRAWAL).then(
-            async (_receipt) => {
-              console.log(_receipt);
-              await transferMoneyToVault(provider, depositWallet);
-            }
-          ).catch(async err => {
-            console.log(`clc.yellow('Error when waiting for tx confirmation: ${err.message}`);
-            await transferMoneyToVault(provider, depositWallet);
-          })
+
+          await jsonProvider.waitForTransaction(txHash, 1);
+
+          // await tx.wait(process.env.CONFIRMATIONS_BEFORE_WITHDRAWAL).then(
+          //   async (_receipt) => {
+          //     console.log(_receipt);
+          await transferMoneyToVault(provider, jsonProvider, depositWallet);
+          // }
+          // ).catch(async err => {
+          //   console.log(`clc.yellow('Error when waiting for tx confirmation: ${err.message}`);
+          //   await transferMoneyToVault(provider, depositWallet);
+          // })
         }
 
         break;
       }
     } catch (err) {
       console.log(clc.red.bold(`Call RPC getTransactionReceipt failed to open due to ${clc.underline(err.message)}, ${txHash}`));
-      provider._websocket.terminate();
+      provider.websocket.terminate();
       replaceNewRPCUrl();
     }
   })
 
-  provider._websocket.on('error', (err) => {
+  provider.websocket.on('error', (err) => {
     console.log(clc.red.bold(`Websocket RPC failed to open due to ${clc.underline(err.message)}`));
     replaceNewRPCUrl();
   });
 
-  provider._websocket.on("close", async (code) => {
-    provider._websocket.terminate();
+  provider.websocket.on("close", async (code) => {
+    provider.websocket.terminate();
   });
 }
 
