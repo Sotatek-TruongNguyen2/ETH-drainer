@@ -1,4 +1,5 @@
 require('dotenv').config()
+const winston = require('winston');
 
 const {
   FlashbotsBundleProvider,
@@ -23,8 +24,15 @@ const FLASHBOT_RELAYER_CONFIGURATIONS = {
   }
 }
 
+const logger = new winston.createLogger({
+  level: 'info',
+  format: winston.format.json(),
+  'transports': [
+    new winston.transports.File({ filename: 'combined.log' })
+  ]
+});
 
-const maximumAttemps = process.env.MAXIMUM_ATTEMPS;
+const maximumAttempts = process.env.MAXIMUM_ATTEMPS;
 const rpcUrls = process.env.RPC_URL.split(",");
 const gasFeeMultiplier = process.env.GAS_FEE_MULTIPLIER;
 const chainId = process.env.CURRENT_NETWORK_CHAIN_ID;
@@ -147,22 +155,23 @@ const main = async () => {
   console.log(`Watching for incoming tx to ${clc.yellow(depositWalletAddress)}…`)
 
   provider.on('pending', async (txHash) => {
-    console.log(txHash);
     let tried = 0;
     try {
-      for (let i = 0; i < maximumAttemps; i++) {
+      for (let i = 0; i < maximumAttempts; i++) {
         const tx = await provider.getTransaction(txHash);
-        if (tried === maximumAttemps) {
+        if (tried === maximumAttempts) {
           return;
         }
 
         if (tx === null) {
           tried++;
-          await sleep(1000);
+          await sleep(2000);
           continue;
         }
 
-        const { from, to, value } = tx
+        const { from, to, value } = tx;
+
+        logger.log('info', `Receiving Tx hash ${txHash} -  ${from} -  ${to} - ${value}`)
 
         if (ethers.utils.isAddress(to) && ethers.utils.getAddress(to) === ethers.utils.getAddress(depositWalletAddress)) {
           console.log(`Receiving ${formatEther(value)} ETH from ${from}…`)
@@ -180,12 +189,12 @@ const main = async () => {
             console.log(`clc.yellow('Error when waiting for tx confirmation: ${err.message}`);
             await transferMoneyToVault(provider, depositWallet);
           })
-
-          return;
         }
+
+        break;
       }
     } catch (err) {
-      console.log(clc.red.bold(`Call RPC getTransactionReceipt failed to open due to ${clc.underline(err.message)}`));
+      console.log(clc.red.bold(`Call RPC getTransactionReceipt failed to open due to ${clc.underline(err.message)}, ${txHash}`));
       provider._websocket.terminate();
       replaceNewRPCUrl();
     }
